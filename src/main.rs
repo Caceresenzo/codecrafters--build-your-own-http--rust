@@ -1,8 +1,11 @@
 use std::{
     collections::HashMap,
+    env::{self, set_current_dir},
     fmt::{self, Debug},
-    io::{BufRead, BufReader, BufWriter, Result, Write},
+    fs::read,
+    io::{BufRead, BufReader, BufWriter, ErrorKind, Result, Write},
     net::{TcpListener, TcpStream},
+    path::Path,
     thread,
 };
 
@@ -24,6 +27,7 @@ enum Status {
     Ok,
     // Created,
     NotFound,
+    ServerError,
 }
 
 impl fmt::Display for Status {
@@ -38,6 +42,7 @@ impl Status {
             Status::Ok => "200 OK",
             // Status::Created => "201 Created",
             Status::NotFound => "404 Not Found",
+            Status::ServerError => "500 Internal Server Error",
         }
     }
 }
@@ -64,15 +69,27 @@ impl Response {
         }
     }
 
-    pub fn text(text: String) -> Response {
+    pub fn text(status: Status, text: String) -> Response {
         let mut headers: HashMap<String, String> = HashMap::new();
         headers.insert("Content-Type".into(), "text/plain".into());
         headers.insert("Content-Length".into(), text.len().to_string());
 
         Response {
-            status: Status::Ok,
+            status,
             headers,
             body: text.as_bytes().into(),
+        }
+    }
+
+    pub fn binary(data: Vec<u8>) -> Response {
+        let mut headers: HashMap<String, String> = HashMap::new();
+        headers.insert("Content-Type".into(), "application/octet-stream".into());
+        headers.insert("Content-Length".into(), data.len().to_string());
+
+        Response {
+            status: Status::Ok,
+            headers,
+            body: data,
         }
     }
 }
@@ -155,7 +172,7 @@ fn route(request: &Request) -> Response {
     if request.path.starts_with("/echo/") {
         let echo = &request.path[6..];
 
-        return Response::text(echo.into());
+        return Response::text(Status::Ok, echo.into());
     }
 
     if request.path.starts_with("/user-agent") {
@@ -164,7 +181,17 @@ fn route(request: &Request) -> Response {
             None => "",
         };
 
-        return Response::text(user_agent.into());
+        return Response::text(Status::Ok, user_agent.into());
+    }
+
+    if request.path.starts_with("/files/") {
+        let path = Path::new(&request.path[7..]);
+
+        return match read(path) {
+            Ok(data) => Response::binary(data),
+            Err(e) if e.kind() == ErrorKind::NotFound => Response::status(Status::NotFound),
+            Err(e) => Response::text(Status::ServerError, format!("{}", e)),
+        };
     }
 
     Response::status(Status::NotFound)
@@ -182,6 +209,13 @@ fn handle(stream: TcpStream) -> Result<String> {
 
 fn main() {
     println!("Logs from your program will appear here!");
+
+    let argv: Vec<String> = env::args().collect();
+    if argv.len() == 3 {
+        let path = Path::new(&argv[2]);
+        assert!(set_current_dir(&path).is_ok());
+        println!("changed directory: {}", path.display());
+    }
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
