@@ -2,14 +2,14 @@ use std::{
     collections::HashMap,
     env::{self, set_current_dir},
     fmt::{self, Debug},
-    fs::read,
-    io::{BufRead, BufReader, BufWriter, ErrorKind, Result, Write},
+    fs::{read, write},
+    io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Result, Write},
     net::{TcpListener, TcpStream},
     path::Path,
     thread,
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum Method {
     Get,
     Post,
@@ -25,7 +25,7 @@ impl fmt::Display for Method {
 #[derive(Debug)]
 enum Status {
     Ok,
-    // Created,
+    Created,
     NotFound,
     ServerError,
 }
@@ -40,7 +40,7 @@ impl Status {
     fn as_str(&self) -> &'static str {
         match self {
             Status::Ok => "200 OK",
-            // Status::Created => "201 Created",
+            Status::Created => "201 Created",
             Status::NotFound => "404 Not Found",
             Status::ServerError => "500 Internal Server Error",
         }
@@ -52,6 +52,7 @@ struct Request {
     pub path: String,
     pub version: String,
     pub headers: HashMap<String, String>,
+    pub body: Vec<u8>,
 }
 
 struct Response {
@@ -126,11 +127,24 @@ fn parse_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
         headers.insert(key.into(), value.into());
     }
 
+    let mut body: Vec<u8> = Vec::new();
+    if method == Method::Post {
+        let content_length = match headers.get("Content-Length") {
+            Some(x) => x.parse::<i32>().unwrap(),
+            None => 0,
+        };
+
+        if content_length != 0 {
+            reader.take(content_length as u64).read_to_end(&mut body)?;
+        }
+    }
+
     Ok(Request {
         method,
         path: path.trim_end().into(),
         version: version.trim_end().into(),
         headers,
+        body,
     })
 }
 
@@ -187,11 +201,19 @@ fn route(request: &Request) -> Response {
     if request.path.starts_with("/files/") {
         let path = Path::new(&request.path[7..]);
 
-        return match read(path) {
-            Ok(data) => Response::binary(data),
-            Err(e) if e.kind() == ErrorKind::NotFound => Response::status(Status::NotFound),
-            Err(e) => Response::text(Status::ServerError, format!("{}", e)),
-        };
+        if request.method == Method::Get {
+            return match read(path) {
+                Ok(data) => Response::binary(data),
+                Err(e) if e.kind() == ErrorKind::NotFound => Response::status(Status::NotFound),
+                Err(e) => Response::text(Status::ServerError, format!("{}", e)),
+            };
+        } else if request.method == Method::Post {
+            return match write(path, &request.body) {
+                Ok(_) => Response::status(Status::Created),
+                Err(e) if e.kind() == ErrorKind::NotFound => Response::status(Status::NotFound),
+                Err(e) => Response::text(Status::ServerError, format!("{}", e)),
+            };
+        }
     }
 
     Response::status(Status::NotFound)
