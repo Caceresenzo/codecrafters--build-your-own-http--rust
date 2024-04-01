@@ -3,6 +3,7 @@ use std::{
     fmt::{self, Debug},
     io::{BufRead, BufReader, BufWriter, Result, Write},
     net::{TcpListener, TcpStream},
+    thread,
 };
 
 #[derive(Debug)]
@@ -189,14 +190,14 @@ fn main() {
             Ok(stream) => {
                 println!("accepted new connection");
 
-                match handle(stream) {
+                thread::spawn(|| match handle(stream) {
                     Ok(msg) => {
                         println!("ok: {}", msg);
                     }
                     Err(e) => {
                         println!("handle error: {}", e);
                     }
-                }
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
