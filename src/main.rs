@@ -1,3 +1,4 @@
+use flate2::{write::GzEncoder, Compression};
 use std::{
     collections::HashMap,
     env::{self, set_current_dir},
@@ -151,7 +152,9 @@ fn parse_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
 }
 
 fn gzip(buffer: &mut Vec<u8>) -> Vec<u8> {
-    return buffer.to_vec();
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(buffer).unwrap();
+    return encoder.finish().unwrap();
 }
 
 fn answer(
@@ -181,7 +184,9 @@ fn answer(
         Some(ref mut body) => match encoder {
             Some((name, func)) => {
                 response.body = Some(func(body));
-                response.headers.insert("Content-Encoding".into(), name.into());
+                response
+                    .headers
+                    .insert("Content-Encoding".into(), name.into());
             }
             None => {}
         },
