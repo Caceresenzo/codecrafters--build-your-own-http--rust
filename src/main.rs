@@ -247,7 +247,7 @@ fn handle(stream: TcpStream) -> Result<String> {
 }
 
 fn main() {
-    println!("Logs from your program will appear here!");
+    println!("codecrafters build-your-own-http");
 
     let argv: Vec<String> = env::args().collect();
     if argv.len() == 3 {
@@ -257,6 +257,7 @@ fn main() {
     }
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
+    println!("listen: 4221");
 
     for stream in listener.incoming() {
         match stream {
