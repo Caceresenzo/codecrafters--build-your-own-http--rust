@@ -179,8 +179,9 @@ fn answer(
 
     match response.body {
         Some(ref mut body) => match encoder {
-            Some((_, func)) => {
+            Some((name, func)) => {
                 response.body = Some(func(body));
+                response.headers.insert("Content-Encoding".into(), name.into());
             }
             None => {}
         },
