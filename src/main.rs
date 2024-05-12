@@ -52,13 +52,13 @@ struct Request {
     pub path: String,
     pub version: String,
     pub headers: HashMap<String, String>,
-    pub body: Vec<u8>,
+    pub body: Option<Vec<u8>>,
 }
 
 struct Response {
     pub status: Status,
     pub headers: HashMap<String, String>,
-    pub body: Vec<u8>,
+    pub body: Option<Vec<u8>>,
 }
 
 impl Response {
@@ -66,31 +66,29 @@ impl Response {
         Response {
             status,
             headers: HashMap::new(),
-            body: Vec::new(),
+            body: None,
         }
     }
 
     pub fn text(status: Status, text: String) -> Response {
         let mut headers: HashMap<String, String> = HashMap::new();
         headers.insert("Content-Type".into(), "text/plain".into());
-        headers.insert("Content-Length".into(), text.len().to_string());
 
         Response {
             status,
             headers,
-            body: text.as_bytes().into(),
+            body: Some(text.as_bytes().into()),
         }
     }
 
     pub fn binary(data: Vec<u8>) -> Response {
         let mut headers: HashMap<String, String> = HashMap::new();
         headers.insert("Content-Type".into(), "application/octet-stream".into());
-        headers.insert("Content-Length".into(), data.len().to_string());
 
         Response {
             status: Status::Ok,
             headers,
-            body: data,
+            body: Some(data),
         }
     }
 }
@@ -127,7 +125,7 @@ fn parse_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
         headers.insert(key.into(), value.into());
     }
 
-    let mut body: Vec<u8> = Vec::new();
+    let mut body: Option<Vec<u8>> = None;
     if method == Method::Post {
         let content_length = match headers.get("Content-Length") {
             Some(x) => x.parse::<i32>().unwrap(),
@@ -135,7 +133,9 @@ fn parse_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
         };
 
         if content_length != 0 {
-            reader.take(content_length as u64).read_to_end(&mut body)?;
+            let mut buffer: Vec<u8> = Vec::new();
+            reader.take(content_length as u64).read_to_end(&mut buffer)?;
+            body = Some(buffer);
         }
     }
 
@@ -169,8 +169,24 @@ fn answer(
         writer.write(&crlf)?;
     }
 
+    match response.body {
+        Some(ref body) => {
+            writer.write("Content-Length".as_bytes())?;
+            writer.write(&colon)?;
+            writer.write(body.len().to_string().as_bytes())?;
+            writer.write(&crlf)?;
+        }
+        None => {}
+    }
+
     writer.write(&crlf)?;
-    writer.write(&response.body)?;
+    
+    match response.body {
+        Some(ref body) => {
+            writer.write(&body)?;
+        }
+        None => {}
+    }
 
     return Ok(format!(
         "{} {} --> {}",
@@ -208,7 +224,8 @@ fn route(request: &Request) -> Response {
                 Err(e) => Response::text(Status::ServerError, format!("{}", e)),
             };
         } else if request.method == Method::Post {
-            return match write(path, &request.body) {
+            let body = request.body.as_ref().unwrap();
+            return match write(path, &body) {
                 Ok(_) => Response::status(Status::Created),
                 Err(e) if e.kind() == ErrorKind::NotFound => Response::status(Status::NotFound),
                 Err(e) => Response::text(Status::ServerError, format!("{}", e)),
