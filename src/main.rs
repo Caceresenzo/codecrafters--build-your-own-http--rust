@@ -134,7 +134,9 @@ fn parse_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
 
         if content_length != 0 {
             let mut buffer: Vec<u8> = Vec::new();
-            reader.take(content_length as u64).read_to_end(&mut buffer)?;
+            reader
+                .take(content_length as u64)
+                .read_to_end(&mut buffer)?;
             body = Some(buffer);
         }
     }
@@ -148,14 +150,42 @@ fn parse_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
     })
 }
 
+fn gzip(buffer: &mut Vec<u8>) -> Vec<u8> {
+    return buffer.to_vec();
+}
+
 fn answer(
     writer: &mut BufWriter<&TcpStream>,
     request: Request,
-    response: Response,
+    mut response: Response,
 ) -> Result<String> {
     let space = [b' '];
     let colon = [b':', b' '];
     let crlf = [b'\r', b'\n'];
+
+    let mut encoder: Option<(&str, fn(&mut Vec<u8>) -> Vec<u8>)> = None;
+    match request.headers.get("Accept-Encoding") {
+        Some(accept_encoding) => {
+            for mut name in accept_encoding.split(",") {
+                name = name.trim();
+
+                if "gzip" == name {
+                    encoder = Some((name, gzip));
+                }
+            }
+        }
+        None => {}
+    }
+
+    match response.body {
+        Some(ref mut body) => match encoder {
+            Some((_, func)) => {
+                response.body = Some(func(body));
+            }
+            None => {}
+        },
+        None => {}
+    }
 
     writer.write(request.version.as_bytes())?;
     writer.write(&space)?;
@@ -180,7 +210,7 @@ fn answer(
     }
 
     writer.write(&crlf)?;
-    
+
     match response.body {
         Some(ref body) => {
             writer.write(&body)?;
