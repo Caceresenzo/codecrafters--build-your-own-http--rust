@@ -98,11 +98,11 @@ fn parse_request(reader: &mut BufReader<&TcpStream>) -> Result<Option<Request>> 
     let mut buffer = String::new();
 
     reader.read_line(&mut buffer)?;
-    if buffer.is_empty() {
-        return Ok(None);
-    }
 
     let parts: Vec<&str> = buffer.split(" ").collect();
+    if parts.len() != 3 {
+        return Ok(None);
+    }
 
     let method = match parts[0] {
         "GET" => Method::Get,
@@ -161,6 +161,28 @@ fn gzip(buffer: &mut Vec<u8>) -> Vec<u8> {
     return encoder.finish().unwrap();
 }
 
+fn encode(request: &Request, response: &mut Response) {
+    let mut encoder: Option<(&str, fn(&mut Vec<u8>) -> Vec<u8>)> = None;
+    if let Some(accept_encoding) = request.headers.get("Accept-Encoding") {
+        for mut name in accept_encoding.split(",") {
+            name = name.trim();
+
+            if "gzip" == name {
+                encoder = Some((name, gzip));
+            }
+        }
+    }
+
+    if let Some(ref mut body) = response.body {
+        if let Some((name, func)) = encoder {
+            response.body = Some(func(body));
+            response
+                .headers
+                .insert("Content-Encoding".into(), name.into());
+        }
+    }
+}
+
 fn answer(
     writer: &mut BufWriter<&TcpStream>,
     request: Request,
@@ -170,31 +192,12 @@ fn answer(
     let colon = [b':', b' '];
     let crlf = [b'\r', b'\n'];
 
-    let mut encoder: Option<(&str, fn(&mut Vec<u8>) -> Vec<u8>)> = None;
-    match request.headers.get("Accept-Encoding") {
-        Some(accept_encoding) => {
-            for mut name in accept_encoding.split(",") {
-                name = name.trim();
-
-                if "gzip" == name {
-                    encoder = Some((name, gzip));
-                }
-            }
-        }
-        None => {}
-    }
-
-    match response.body {
-        Some(ref mut body) => match encoder {
-            Some((name, func)) => {
-                response.body = Some(func(body));
-                response
-                    .headers
-                    .insert("Content-Encoding".into(), name.into());
-            }
-            None => {}
-        },
-        None => {}
+    if let Some(body) = &response.body {
+        response
+            .headers
+            .insert("Content-Length".into(), body.len().to_string());
+    } else {
+        response.headers.insert("Content-Length".into(), "0".into());
     }
 
     writer.write(request.version.as_bytes())?;
@@ -209,23 +212,12 @@ fn answer(
         writer.write(&crlf)?;
     }
 
-    match response.body {
-        Some(ref body) => {
-            writer.write("Content-Length".as_bytes())?;
-            writer.write(&colon)?;
-            writer.write(body.len().to_string().as_bytes())?;
-            writer.write(&crlf)?;
-        }
-        None => {}
-    }
-
     writer.write(&crlf)?;
+    writer.flush()?;
 
-    match response.body {
-        Some(ref body) => {
-            writer.write(&body)?;
-        }
-        None => {}
+    if let Some(body) = response.body {
+        writer.write(&body)?;
+        writer.flush()?;
     }
 
     println!(
@@ -278,15 +270,35 @@ fn route(request: &Request) -> Response {
     Response::status(Status::NotFound)
 }
 
-fn handle(stream: TcpStream) -> Result<()> {
-    loop {
-        let mut reader = BufReader::new(&stream);
-        let mut writer = BufWriter::new(&stream);
+fn should_close(request: &Request, response: &mut Response) -> bool {
+    return if let Some(value) = request.headers.get("Connection") {
+        if value == "close" {
+            response.headers.insert("Connection".into(), "close".into());
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+}
 
+fn handle(stream: TcpStream) -> Result<()> {
+    let mut reader = BufReader::new(&stream);
+    let mut writer = BufWriter::new(&stream);
+
+    loop {
         if let Some(request) = parse_request(&mut reader)? {
-            let response = route(&request);
+            let mut response = route(&request);
+            encode(&request, &mut response);
+
+            let should_close = should_close(&request, &mut response);
 
             answer(&mut writer, request, response)?;
+
+            if should_close {
+                break;
+            }
         } else {
             break;
         }
