@@ -94,10 +94,14 @@ impl Response {
     }
 }
 
-fn parse_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
+fn parse_request(reader: &mut BufReader<&TcpStream>) -> Result<Option<Request>> {
     let mut buffer = String::new();
 
     reader.read_line(&mut buffer)?;
+    if buffer.is_empty() {
+        return Ok(None);
+    }
+
     let parts: Vec<&str> = buffer.split(" ").collect();
 
     let method = match parts[0] {
@@ -142,13 +146,13 @@ fn parse_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
         }
     }
 
-    Ok(Request {
+    Ok(Some(Request {
         method,
         path: path.trim_end().into(),
         version: version.trim_end().into(),
         headers,
         body,
-    })
+    }))
 }
 
 fn gzip(buffer: &mut Vec<u8>) -> Vec<u8> {
@@ -161,7 +165,7 @@ fn answer(
     writer: &mut BufWriter<&TcpStream>,
     request: Request,
     mut response: Response,
-) -> Result<String> {
+) -> Result<()> {
     let space = [b' '];
     let colon = [b':', b' '];
     let crlf = [b'\r', b'\n'];
@@ -224,10 +228,12 @@ fn answer(
         None => {}
     }
 
-    return Ok(format!(
+    println!(
         "{} {} --> {}",
         request.method, request.path, response.status
-    ));
+    );
+
+    return Ok(());
 }
 
 fn route(request: &Request) -> Response {
@@ -272,14 +278,21 @@ fn route(request: &Request) -> Response {
     Response::status(Status::NotFound)
 }
 
-fn handle(stream: TcpStream) -> Result<String> {
-    let mut reader = BufReader::new(&stream);
-    let mut writer = BufWriter::new(&stream);
+fn handle(stream: TcpStream) -> Result<()> {
+    loop {
+        let mut reader = BufReader::new(&stream);
+        let mut writer = BufWriter::new(&stream);
 
-    let request = parse_request(&mut reader)?;
-    let response = route(&request);
+        if let Some(request) = parse_request(&mut reader)? {
+            let response = route(&request);
 
-    answer(&mut writer, request, response)
+            answer(&mut writer, request, response)?;
+        } else {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 fn main() {
@@ -301,8 +314,8 @@ fn main() {
                 println!("accepted new connection");
 
                 thread::spawn(|| match handle(stream) {
-                    Ok(msg) => {
-                        println!("ok: {}", msg);
+                    Ok(_) => {
+                        println!("closed connection");
                     }
                     Err(e) => {
                         println!("handle error: {}", e);
